@@ -28,7 +28,7 @@ export default {
     console.log('📨 Message from:', message.from)
     console.log('📬 Message to:', message.to)
     console.log('📝 Message subject:', message.headers.get('subject') || 'No subject')
-    console.log('📏 Message size:', message.raw.length, 'bytes')
+    console.log('📏 Message size:', message.raw?.length || 'unknown', 'bytes')
 
     try {
       await handleEmail(message, env, ctx)
@@ -36,7 +36,23 @@ export default {
     } catch (error) {
       console.error('❌ ===== Email Processing Failed =====')
       console.error('💥 Error details:', error)
-      throw error
+      
+      // 记录详细的错误信息
+      if (error instanceof Error) {
+        console.error('📋 Error stack:', error.stack)
+        console.error('📋 Error name:', error.name)
+        console.error('📋 Error message:', error.message)
+      }
+      
+      // 记录消息上下文
+      console.error('📧 Message context for debugging:')
+      console.error('  - Message type:', typeof message)
+      console.error('  - Message keys:', message ? Object.keys(message) : 'null')
+      console.error('  - Has raw:', !!message?.raw)
+      console.error('  - Raw type:', message?.raw ? typeof message.raw : 'N/A')
+      
+      // 不要重新抛出错误，让Worker优雅地处理
+      console.log('⚠️ Worker will continue running despite this error')
     }
   },
 }
@@ -47,6 +63,7 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
   const parser = new PostalMime.default()
   console.log('📦 Initialized PostalMime parser')
 
+  // 全局错误处理包装
   try {
     // 解析邮件内容
     console.log('📖 Step 1: Parsing email content...')
@@ -90,6 +107,23 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
       console.log(' - Subject: [encoding issue]')
       console.log(' - Date: [encoding issue]')
       console.log(' - Attachment count:', email.attachments?.length || 0)
+    }
+
+    // 额外的安全检查：确保email对象结构完整
+    if (!email || typeof email !== 'object') {
+      throw new Error('Invalid email object structure')
+    }
+    
+    // 确保attachments属性存在
+    if (!email.attachments) {
+      console.log('ℹ️ Email attachments property is undefined, initializing as empty array')
+      email.attachments = []
+    }
+    
+    // 确保attachments是数组
+    if (!Array.isArray(email.attachments)) {
+      console.log('ℹ️ Email attachments is not an array, converting to empty array')
+      email.attachments = []
     }
 
     // 处理附件（如果有的话）
@@ -156,7 +190,11 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
       }
     } else {
       console.log('ℹ️ No attachments found, treating as regular email')
+      console.log('📧 This is a standard email without attachments - processing normally')
       emailType = 'regular'
+      // 确保没有附件时不会抛出错误
+      attachment = null
+      reportRows = []
     }
 
     // 记录邮件类型和处理状态
@@ -168,7 +206,14 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
 
     // 调用UniCloud云函数处理数据（无论是否有附件都调用）
     console.log('☁️ Step 4: Calling UniCloud function to process email data...')
-    await callUniCloudFunction(email, attachment, reportRows)
+    try {
+      await callUniCloudFunction(email, attachment, reportRows)
+      console.log('✅ UniCloud function call completed successfully')
+    } catch (cloudFunctionError) {
+      console.error('❌ UniCloud function call failed:', cloudFunctionError)
+      // 即使云函数调用失败，也不应该让整个邮件处理失败
+      console.log('⚠️ Continuing with email processing despite cloud function failure')
+    }
 
     // 根据邮件类型输出不同的成功信息
     if (emailType === 'dmarc_report') {
@@ -181,6 +226,9 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
       console.log('✅ Regular email processed successfully!')
       console.log('📧 No attachments, standard email processing completed')
     }
+    
+    console.log('🎯 ===== Email Processing Completed Successfully =====')
+    
   } catch (error) {
     const err = error as Error
     console.error('❌ Email processing error:', error)
@@ -198,7 +246,15 @@ async function handleEmail(message: any, env: Env, ctx: any): Promise<void> {
       console.error('  - Raw content type:', message.raw ? typeof message.raw : 'N/A')
     }
     
-    throw error
+    // 记录详细的错误信息用于调试
+    console.error('🔍 Detailed error analysis:')
+    console.error('  - Error type:', err.constructor.name)
+    console.error('  - Error message:', err.message)
+    console.error('  - Error stack:', err.stack)
+    
+    // 不要重新抛出错误，让Worker优雅地处理
+    console.log('⚠️ Worker will continue running despite this error')
+    console.log('📧 Email processing failed but Worker remains stable')
   }
 }
 
